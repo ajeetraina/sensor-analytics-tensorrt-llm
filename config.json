@@ -1,1 +1,26 @@
-{\n    \"neo4j\": {\n        \"uri\": \"neo4j+s://localhost:7687\",\n        \"user\": \"neo4j\",\n        \"password\": \"REPLACE_WITH_YOUR_PASSWORD\"\n    },\n    \"tensorrt\": {\n        \"model_path\": \"models/sensor_model.engine\",\n        \"threshold\": 0.75,\n        \"enable_filtering\": true\n    },\n    \"sampling\": {\n        \"interval\": 5,\n        \"batch_size\": 10\n    },\n    \"logging\": {\n        \"file\": \"sensor_logs.json\",\n        \"level\": \"INFO\",\n        \"enable_console\": true\n    },\n    \"features\": {\n        \"anomaly_detection\": true,\n        \"data_enrichment\": true,\n        \"notifications\": false\n    }\n}
+{
+    "neo4j": {
+        "uri": "neo4j+s://localhost:7687",
+        "user": "neo4j",
+        "password": "REPLACE_WITH_YOUR_PASSWORD"
+    },
+    "tensorrt": {
+        "model_path": "models/sensor_model.engine",
+        "threshold": 0.75,
+        "enable_filtering": true
+    },
+    "sampling": {
+        "interval": 5,
+        "batch_size": 10
+    },
+    "logging": {
+        "file": "sensor_logs.json",
+        "level": "INFO",
+        "enable_console": true
+    },
+    "features": {
+        "anomaly_detection": true,
+        "data_enrichment": true,
+        "notifications": false
+    }
+}
