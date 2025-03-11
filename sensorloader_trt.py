@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+# sensorloader_trt.py - Read BME680 sensor data and process with TensorRT model
 
 import time
 import logging
@@ -35,25 +35,42 @@ class TensorRTInference:
         # Create execution context
         self.context = self.engine.create_execution_context()
         
-        # Allocate memory for input/output
-        self.input_binding_idx = self.engine.get_binding_index('input')
-        self.output_binding_idx = self.engine.get_binding_index('output')
+        # Get binding indices
+        self.num_bindings = self.engine.num_bindings
+        self.input_idx = None
+        self.output_idx = None
+        
+        for i in range(self.num_bindings):
+            name = self.engine.get_binding_name(i)
+            if self.engine.binding_is_input(i):
+                if 'input' in name:  # Match the name used in ONNX export
+                    self.input_idx = i
+            else:
+                self.output_idx = i
+        
+        if self.input_idx is None:
+            raise RuntimeError("Input binding not found")
+        if self.output_idx is None:
+            raise RuntimeError("Output binding not found")
         
         # Get data shapes
-        self.input_shape = self.engine.get_binding_shape(self.input_binding_idx)
-        self.output_shape = self.engine.get_binding_shape(self.output_binding_idx)
+        self.input_shape = self.engine.get_binding_dimensions(self.input_idx)
+        self.output_shape = self.engine.get_binding_dimensions(self.output_idx)
         
         # Set optimization profile if using dynamic shapes
         # For batch size 1
-        self.context.set_binding_shape(self.input_binding_idx, (1, self.input_shape[1]))
+        input_shape = list(self.input_shape)
+        if len(input_shape) > 0:  # If dynamic shape
+            input_shape[0] = 1  # Set batch size to 1
+            self.context.set_binding_shape(self.input_idx, input_shape)
         
         # Create GPU buffers
-        self.d_input = cuda.mem_alloc(1 * self.input_shape[1] * np.dtype(np.float32).itemsize)
-        self.d_output = cuda.mem_alloc(1 * self.output_shape[1] * np.dtype(np.float32).itemsize)
+        self.d_input = cuda.mem_alloc(1 * self.input_shape[-1] * np.dtype(np.float32).itemsize)
+        self.d_output = cuda.mem_alloc(1 * self.output_shape[-1] * np.dtype(np.float32).itemsize)
         
         # Create host buffers
-        self.h_input = cuda.pagelocked_empty((1, self.input_shape[1]), dtype=np.float32)
-        self.h_output = cuda.pagelocked_empty((1, self.output_shape[1]), dtype=np.float32)
+        self.h_input = cuda.pagelocked_empty((1, self.input_shape[-1]), dtype=np.float32)
+        self.h_output = cuda.pagelocked_empty((1, self.output_shape[-1]), dtype=np.float32)
         
         # Create CUDA stream
         self.stream = cuda.Stream()
@@ -72,8 +89,11 @@ class TensorRTInference:
         cuda.memcpy_htod_async(self.d_input, self.h_input, self.stream)
         
         # Run inference
+        bindings = [int(self.d_input) if i == self.input_idx else int(self.d_output) 
+                    for i in range(self.num_bindings)]
+        
         self.context.execute_async_v2(
-            bindings=[int(self.d_input), int(self.d_output)],
+            bindings=bindings,
             stream_handle=self.stream.handle
         )
         
@@ -123,12 +143,12 @@ def initialize_sensor():
         # Initialize BME680 with the specified bus
         sensor = BME680(i2c_device=i2c_bus)
         
-        # Configure the sensor
-        sensor.set_humidity_oversample(BME680.OS_2X)
-        sensor.set_pressure_oversample(BME680.OS_4X)
-        sensor.set_temperature_oversample(BME680.OS_8X)
-        sensor.set_filter(BME680.FILTER_SIZE_3)
-        sensor.set_gas_status(BME680.ENABLE_GAS_MEAS)
+        # Configure the sensor with direct values instead of enums
+        sensor.set_humidity_oversample(2)  # Instead of BME680.OS_2X
+        sensor.set_pressure_oversample(4)  # Instead of BME680.OS_4X
+        sensor.set_temperature_oversample(8)  # Instead of BME680.OS_8X
+        sensor.set_filter(3)  # Instead of BME680.FILTER_SIZE_3
+        sensor.set_gas_status(1)  # Instead of BME680.ENABLE_GAS_MEAS
         
         # Set gas heater parameters for measuring VOCs
         sensor.set_gas_heater_temperature(320)
