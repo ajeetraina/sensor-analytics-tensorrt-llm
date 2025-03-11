@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# sensorloader_trt.py - Read BME680 sensor data and process with TensorRT model
+
 
 import time
 import logging
