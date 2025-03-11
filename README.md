@@ -64,6 +64,32 @@ This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor dat
    python build_sensor_model.py
    ```
 
+   ```
+   python build_sensor_model.py
+Building TensorRT LLM model for sensor data filtering...
+2025-03-11 13:36:08,335 - INFO - No log data found. Generating synthetic training data...
+Training data shape: X=(5000, 4), y=(5000, 5)
+Epoch 50/500, Loss: 0.000020
+Epoch 100/500, Loss: 0.000002
+Epoch 150/500, Loss: 0.000000
+Epoch 200/500, Loss: 0.000000
+Epoch 250/500, Loss: 0.000000
+Epoch 300/500, Loss: 0.000000
+Epoch 350/500, Loss: 0.000000
+Epoch 400/500, Loss: 0.000000
+Epoch 450/500, Loss: 0.000000
+Epoch 500/500, Loss: 0.000000
+Training completed
+ONNX model exported to models/sensor_model.onnx
+[03/11/2025-13:38:34] [TRT] [W] DLA requests all profiles have same min, max, and opt value. All dla layers are falling back to GPU
+TensorRT engine exported to models/sensor_model.engine
+Sample data generated and saved to data/sensor_readings.csv
+Neo4j import script generated at data/import_to_neo4j.cypher
+Grafana example queries saved to data/grafana_example_queries.txt
+Model processing complete! Engine saved at models/sensor_model.engine
+You can now use the generated Neo4j data and Grafana queries for visualization.
+```
+
 5. Run the sensor data collection:
    ```
    python sensorloader_trt.py
