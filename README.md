@@ -60,12 +60,13 @@ This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor dat
    ```
 
 4. Build the TensorRT model:
+
    ```
    python build_sensor_model.py
    ```
 
-   ```
-   python build_sensor_model.py
+```
+python build_sensor_model.py
 Building TensorRT LLM model for sensor data filtering...
 2025-03-11 13:36:08,335 - INFO - No log data found. Generating synthetic training data...
 Training data shape: X=(5000, 4), y=(5000, 5)
@@ -91,7 +92,8 @@ You can now use the generated Neo4j data and Grafana queries for visualization.
 ```
 
 5. Run the sensor data collection:
-   ```
+
+    ```
    python sensorloader_trt.py
    ```
 
