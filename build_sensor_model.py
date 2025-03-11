@@ -1,398 +1,348 @@
+#!/usr/bin/env python3
+# build_sensor_model.py
 import os
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import onnx
 import tensorrt as trt
-import json
-from datetime import datetime
+import pandas as pd
+from datetime import datetime, timedelta
+import random
+import logging
 
-def load_training_data(log_file):
-    """
-    Load training data from log file
-    
-    Args:
-        log_file: Path to log file with raw and filtered sensor data
-        
-    Returns:
-        X_train, y_train arrays for model training
-    """
-    X = []
-    y = []
-    
-    with open(log_file, 'r') as f:
-        for line in f:
-            try:
-                entry = json.loads(line.strip())
-                raw_data = entry['data']['raw']
-                filtered_data = entry['data']['filtered']
-                
-                # Feature vector: normalized sensor values
-                features = [
-                    raw_data['temperature'] / 100.0,
-                    raw_data['humidity'] / 100.0,
-                    raw_data['pressure'] / 1100.0,
-                    np.log10(max(raw_data['gas'], 1)) / 5.0
-                ]
-                
-                # Target: validity flag and normalized filtered values
-                # If raw == filtered, data is valid (1.0), otherwise invalid (< 1.0)
-                is_valid = 1.0 if entry['status'] == 'normal' else 0.5
-                
-                targets = [
-                    is_valid,
-                    filtered_data['temperature'] / 100.0,
-                    filtered_data['humidity'] / 100.0,
-                    filtered_data['pressure'] / 1100.0,
-                    np.log10(max(filtered_data['gas'], 1)) / 5.0
-                ]
-                
-                X.append(features)
-                y.append(targets)
-            except Exception as e:
-                print(f"Error processing log entry: {e}")
-    
-    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def create_onnx_model(input_shape, output_shape, hidden_layers=[16, 8]):
-    """
-    Create a PyTorch model and export to ONNX
+# Ensure models directory exists
+os.makedirs('models', exist_ok=True)
+
+class SensorModel(nn.Module):
+    """Neural network model for sensor data processing."""
+    def __init__(self, input_size=4, hidden_size=64, output_size=5):
+        super(SensorModel, self).__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size),
+            nn.Sigmoid()  # For classification/filtering tasks
+        )
     
-    Args:
-        input_shape: Shape of input tensor
-        output_shape: Shape of output tensor
-        hidden_layers: List of hidden layer sizes
-        
+    def forward(self, x):
+        return self.layers(x)
+
+def load_sensor_data(data_path=None):
+    """
+    Load sensor data from CSV or generate synthetic data if not available.
+    
     Returns:
-        Path to exported ONNX model
+        X_data: Normalized sensor readings (temperature, humidity, pressure, gas_resistance)
+        y_data: Labels for data filtering (1 for valid reading, 0 for anomaly)
     """
-    class SensorModel(torch.nn.Module):
-        def __init__(self, input_size, output_size, hidden_layers):
-            super(SensorModel, self).__init__()
+    if data_path and os.path.exists(data_path):
+        try:
+            df = pd.read_csv(data_path)
+            # Assuming columns: timestamp, temperature, humidity, pressure, gas_resistance, is_valid
+            X_data = df[['temperature', 'humidity', 'pressure', 'gas_resistance']].values
+            y_data = df[['is_valid', 'is_temperature_valid', 'is_humidity_valid', 
+                         'is_pressure_valid', 'is_gas_valid']].values
             
-            # Build network layers
-            layers = []
-            prev_size = input_size
+            # Normalize data
+            X_mean = X_data.mean(axis=0)
+            X_std = X_data.std(axis=0)
+            X_data = (X_data - X_mean) / X_std
             
-            for size in hidden_layers:
-                layers.append(torch.nn.Linear(prev_size, size))
-                layers.append(torch.nn.ReLU())
-                prev_size = size
+            return X_data, y_data
+        except Exception as e:
+            logger.error(f"Failed to load data from {data_path}: {e}")
+    
+    # Generate synthetic data if no data file found
+    logger.info("No log data found. Generating synthetic training data...")
+    return generate_synthetic_data()
+
+def generate_synthetic_data(n_samples=5000):
+    """Generate synthetic sensor data for training."""
+    # Define normal ranges for sensors
+    temp_range = (15, 35)  # °C
+    humidity_range = (30, 70)  # %
+    pressure_range = (990, 1030)  # hPa
+    gas_range = (500, 1500)  # kOhm
+    
+    # Generate normal readings
+    temperature = np.random.uniform(temp_range[0], temp_range[1], n_samples)
+    humidity = np.random.uniform(humidity_range[0], humidity_range[1], n_samples)
+    pressure = np.random.uniform(pressure_range[0], pressure_range[1], n_samples)
+    gas_resistance = np.random.uniform(gas_range[0], gas_range[1], n_samples)
+    
+    # Introduce some anomalies
+    anomaly_rate = 0.15
+    anomaly_indices = np.random.choice(n_samples, int(n_samples * anomaly_rate), replace=False)
+    
+    # Create larger anomalies for some points
+    temperature[anomaly_indices] += np.random.choice([-20, 20], size=len(anomaly_indices))
+    humidity[anomaly_indices] += np.random.choice([-40, 40], size=len(anomaly_indices))
+    pressure[anomaly_indices] += np.random.choice([-50, 50], size=len(anomaly_indices))
+    gas_resistance[anomaly_indices] += np.random.choice([-1000, 1000], size=len(anomaly_indices))
+    
+    # Stack features
+    X_data = np.column_stack((temperature, humidity, pressure, gas_resistance))
+    
+    # Create labels (0 for anomaly, 1 for normal)
+    y_data = np.ones((n_samples, 5))  # All valid by default
+    
+    # Mark specific anomalies
+    temp_anomalies = (temperature < temp_range[0]) | (temperature > temp_range[1])
+    humidity_anomalies = (humidity < humidity_range[0]) | (humidity > humidity_range[1])
+    pressure_anomalies = (pressure < pressure_range[0]) | (pressure > pressure_range[1])
+    gas_anomalies = (gas_resistance < gas_range[0]) | (gas_resistance > gas_range[1])
+    
+    # Set label for overall validity and individual sensor validity
+    any_anomaly = temp_anomalies | humidity_anomalies | pressure_anomalies | gas_anomalies
+    y_data[any_anomaly, 0] = 0  # Overall validity
+    y_data[temp_anomalies, 1] = 0  # Temperature validity
+    y_data[humidity_anomalies, 2] = 0  # Humidity validity  
+    y_data[pressure_anomalies, 3] = 0  # Pressure validity
+    y_data[gas_anomalies, 4] = 0  # Gas validity
+    
+    # Normalize data
+    X_mean = X_data.mean(axis=0)
+    X_std = X_data.std(axis=0)
+    X_data = (X_data - X_mean) / X_std
+    
+    return X_data, y_data
+
+def train_model(X_data, y_data, epochs=500, batch_size=64, learning_rate=0.001):
+    """Train the sensor data filtering model."""
+    # Convert to PyTorch tensors
+    X_tensor = torch.FloatTensor(X_data)
+    y_tensor = torch.FloatTensor(y_data)
+    
+    # Create dataset and dataloader
+    dataset = TensorDataset(X_tensor, y_tensor)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # Initialize model
+    model = SensorModel(input_size=X_data.shape[1], output_size=y_data.shape[1])
+    
+    # Loss function and optimizer
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    
+    # Training loop
+    print(f"Training data shape: X={X_data.shape}, y={y_data.shape}")
+    for epoch in range(1, epochs + 1):
+        running_loss = 0.0
+        for inputs, targets in dataloader:
+            # Zero the parameter gradients
+            optimizer.zero_grad()
             
-            layers.append(torch.nn.Linear(prev_size, output_size))
+            # Forward + backward + optimize
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
             
-            # Add sigmoid activation for the first output (validity score)
-            self.network = torch.nn.Sequential(*layers)
-            self.sigmoid = torch.nn.Sigmoid()
+            running_loss += loss.item() * inputs.size(0)
         
-        def forward(self, x):
-            outputs = self.network(x)
-            # Apply sigmoid only to the first output (validity score)
-            outputs[:, 0] = self.sigmoid(outputs[:, 0])
-            return outputs
+        epoch_loss = running_loss / len(dataloader.dataset)
+        if epoch % 50 == 0:
+            print(f"Epoch {epoch}/{epochs}, Loss: {epoch_loss:.6f}")
     
-    # Create model
-    input_size = input_shape[1]
-    output_size = output_shape[1]
-    model = SensorModel(input_size, output_size, hidden_layers)
-    
+    print("Training completed")
+    return model
+
+def export_to_onnx(model, input_shape, onnx_path):
+    """Export PyTorch model to ONNX format."""
     # Create dummy input
-    dummy_input = torch.randn(1, input_size)
+    dummy_input = torch.randn(1, input_shape, requires_grad=True)
     
-    # Export to ONNX
-    onnx_path = "models/sensor_model.onnx"
-    os.makedirs("models", exist_ok=True)
-    
+    # Export model
     torch.onnx.export(
         model,
         dummy_input,
         onnx_path,
         export_params=True,
-        opset_version=13,
+        opset_version=12,
         do_constant_folding=True,
         input_names=['input'],
         output_names=['output'],
-        dynamic_axes={'input': {0: 'batch_size'},
-                      'output': {0: 'batch_size'}}
+        dynamic_axes={
+            'input': {0: 'batch_size'},
+            'output': {0: 'batch_size'}
+        }
     )
+    
+    # Verify the ONNX model
+    onnx_model = onnx.load(onnx_path)
+    onnx.checker.check_model(onnx_model)
     
     print(f"ONNX model exported to {onnx_path}")
     return onnx_path
 
 def build_tensorrt_engine(onnx_path):
-    """
-    Build TensorRT engine from ONNX model
-    
-    Args:
-        onnx_path: Path to ONNX model
-        
-    Returns:
-        Path to TensorRT engine
-    """
-    # Initialize TRT logger
+    """Build TensorRT engine from ONNX model."""
     logger = trt.Logger(trt.Logger.WARNING)
-    
-    # Create builder and network
     builder = trt.Builder(logger)
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-    config = builder.create_builder_config()
-    
-    # Set max workspace size (1GB)
-    config.max_workspace_size = 1 << 30
-    
-    # Parse ONNX model
     parser = trt.OnnxParser(network, logger)
-    with open(onnx_path, 'rb') as f:
-        if not parser.parse(f.read()):
+    
+    with open(onnx_path, 'rb') as model:
+        if not parser.parse(model.read()):
             for error in range(parser.num_errors):
-                print(f"ONNX parse error: {parser.get_error(error)}")
-            raise RuntimeError("Failed to parse ONNX model")
+                print(parser.get_error(error))
+            raise RuntimeError(f"Failed to parse ONNX file: {onnx_path}")
     
-    # Build engine
+    config = builder.create_builder_config()
+    # Updated API for TensorRT 8.x+
+    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
+    
+    # New TensorRT API (8.x+)
+    serialized_engine = builder.build_serialized_network(network, config)
+    
+    # Save engine to file
     engine_path = onnx_path.replace('.onnx', '.engine')
-    engine = builder.build_engine(network, config)
-    
-    # Serialize engine to file
     with open(engine_path, 'wb') as f:
-        f.write(engine.serialize())
+        f.write(serialized_engine)
     
-    print(f"TensorRT engine built and saved to {engine_path}")
+    print(f"TensorRT engine exported to {engine_path}")
     return engine_path
 
-def train_model(X_train, y_train, epochs=500, lr=0.001):
-    """
-    Train PyTorch model on sensor data
+def generate_sample_neo4j_data():
+    """Generate sample sensor readings for Neo4j import."""
+    start_date = datetime.now() - timedelta(days=30)
+    end_date = datetime.now()
     
-    Args:
-        X_train: Training features
-        y_train: Training targets
-        epochs: Number of training epochs
-        lr: Learning rate
+    readings = []
+    current_date = start_date
+    
+    # Define normal ranges
+    temp_range = (15, 35)
+    humidity_range = (30, 70)
+    pressure_range = (990, 1030)
+    gas_range = (500, 1500)
+    
+    # Generate hourly readings
+    while current_date <= end_date:
+        # Normal values with some random variation
+        temp = random.uniform(temp_range[0], temp_range[1])
+        humidity = random.uniform(humidity_range[0], humidity_range[1])
+        pressure = random.uniform(pressure_range[0], pressure_range[1])
+        gas = random.uniform(gas_range[0], gas_range[1])
         
-    Returns:
-        Trained PyTorch model
-    """
-    # Convert to PyTorch tensors
-    X_tensor = torch.tensor(X_train, dtype=torch.float32)
-    y_tensor = torch.tensor(y_train, dtype=torch.float32)
-    
-    # Create dataset and dataloader
-    dataset = torch.utils.data.TensorDataset(X_tensor, y_tensor)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
-    
-    # Create model
-    input_size = X_train.shape[1]
-    output_size = y_train.shape[1]
-    
-    class SensorModel(torch.nn.Module):
-        def __init__(self, input_size, output_size, hidden_layers=[16, 8]):
-            super(SensorModel, self).__init__()
-            
-            # Build network layers
-            layers = []
-            prev_size = input_size
-            
-            for size in hidden_layers:
-                layers.append(torch.nn.Linear(prev_size, size))
-                layers.append(torch.nn.ReLU())
-                prev_size = size
-            
-            layers.append(torch.nn.Linear(prev_size, output_size))
-            
-            self.network = torch.nn.Sequential(*layers)
-            self.sigmoid = torch.nn.Sigmoid()
+        # Add some anomalies (about 5% of readings)
+        if random.random() < 0.05:
+            # Choose one parameter to make anomalous
+            anomaly_param = random.choice(['temp', 'humidity', 'pressure', 'gas'])
+            if anomaly_param == 'temp':
+                temp += random.choice([-20, 20])
+            elif anomaly_param == 'humidity':
+                humidity += random.choice([-40, 40])
+            elif anomaly_param == 'pressure':
+                pressure += random.choice([-50, 50])
+            else:
+                gas += random.choice([-1000, 1000])
         
-        def forward(self, x):
-            outputs = self.network(x)
-            # Apply sigmoid only to the first output (validity score)
-            outputs[:, 0] = self.sigmoid(outputs[:, 0])
-            return outputs
-    
-    model = SensorModel(input_size, output_size)
-    
-    # Define loss function and optimizer
-    # Custom loss: MSE for filtered values, BCE for validity flag
-    def custom_loss(pred, target):
-        # MSE for the filtered values (outputs 1-4)
-        mse_loss = torch.nn.functional.mse_loss(pred[:, 1:], target[:, 1:])
+        timestamp = int(current_date.timestamp() * 1000)  # milliseconds for Neo4j
         
-        # BCE for the validity flag (output 0)
-        bce_loss = torch.nn.functional.binary_cross_entropy(pred[:, 0], target[:, 0])
+        readings.append({
+            'timestamp': timestamp,
+            'temperature': round(temp, 2),
+            'humidity': round(humidity, 2),
+            'pressure': round(pressure, 2),
+            'gas': round(gas, 2)
+        })
         
-        # Combine losses
-        return mse_loss + bce_loss
+        # Next hour
+        current_date += timedelta(hours=1)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # Save to CSV for easy import to Neo4j
+    df = pd.DataFrame(readings)
+    csv_path = 'data/sensor_readings.csv'
+    os.makedirs('data', exist_ok=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Sample data generated and saved to {csv_path}")
     
-    # Train the model
-    model.train()
-    for epoch in range(epochs):
-        epoch_loss = 0
-        for batch_X, batch_y in dataloader:
-            # Forward pass
-            outputs = model(batch_X)
-            loss = custom_loss(outputs, batch_y)
-            
-            # Backward pass and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            epoch_loss += loss.item()
-        
-        # Print progress
-        if (epoch + 1) % 50 == 0:
-            print(f'Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/len(dataloader):.6f}')
-    
-    print("Training completed")
-    return model
+    # Generate Neo4j Cypher import script
+    cypher_path = 'data/import_to_neo4j.cypher'
+    with open(cypher_path, 'w') as f:
+        f.write("""
+// Create constraints
+CREATE CONSTRAINT IF NOT EXISTS FOR (s:SensorReading) REQUIRE s.timestamp IS UNIQUE;
 
-def generate_sample_data(num_samples=1000):
-    """
-    Generate sample training data if real logs are not available
+// Load CSV data
+LOAD CSV WITH HEADERS FROM 'file:///sensor_readings.csv' AS row
+CREATE (s:SensorReading {
+  timestamp: toInteger(row.timestamp),
+  temperature: toFloat(row.temperature),
+  humidity: toFloat(row.humidity),
+  pressure: toFloat(row.pressure),
+  gas: toFloat(row.gas)
+});
+
+// Index for time range queries
+CREATE INDEX ON :SensorReading(timestamp);
+        """)
     
-    Args:
-        num_samples: Number of samples to generate
-        
-    Returns:
-        X_train, y_train arrays
-    """
-    X = []
-    y = []
+    print(f"Neo4j import script generated at {cypher_path}")
     
-    for _ in range(num_samples):
-        # Generate normal readings
-        temp = np.random.uniform(15, 35)  # 15-35°C
-        humidity = np.random.uniform(30, 80)  # 30-80%
-        pressure = np.random.uniform(980, 1030)  # 980-1030 hPa
-        gas = np.random.uniform(1000, 20000)  # 1000-20000 ohms
-        
-        # Features
-        features = [
-            temp / 100.0,
-            humidity / 100.0,
-            pressure / 1100.0,
-            np.log10(gas) / 5.0
-        ]
-        
-        # Randomly make some samples anomalous
-        is_anomaly = np.random.random() < 0.1  # 10% anomalies
-        
-        if is_anomaly:
-            # Add significant deviation to one random reading
-            anomaly_idx = np.random.randint(0, 4)
-            if anomaly_idx == 0:
-                # Temperature anomaly
-                temp = np.random.choice([
-                    np.random.uniform(-10, 5),  # Too cold
-                    np.random.uniform(45, 60)   # Too hot
-                ])
-                features[0] = temp / 100.0
-            elif anomaly_idx == 1:
-                # Humidity anomaly
-                humidity = np.random.choice([
-                    np.random.uniform(0, 20),    # Too dry
-                    np.random.uniform(90, 110)   # Too humid
-                ])
-                features[1] = humidity / 100.0
-            elif anomaly_idx == 2:
-                # Pressure anomaly
-                pressure = np.random.choice([
-                    np.random.uniform(900, 950),    # Too low
-                    np.random.uniform(1050, 1100)   # Too high
-                ])
-                features[2] = pressure / 1100.0
-            else:
-                # Gas anomaly
-                gas = np.random.choice([
-                    np.random.uniform(100, 500),       # Too low
-                    np.random.uniform(30000, 50000)    # Too high
-                ])
-                features[3] = np.log10(gas) / 5.0
-            
-            # Targets for anomalies - validity score is lower
-            is_valid = 0.2  # Low validity score
-            
-            # Corrected values (what we'd expect)
-            if anomaly_idx == 0:
-                corrected_temp = np.clip(temp, 15, 35)
-                targets = [
-                    is_valid,
-                    corrected_temp / 100.0,
-                    humidity / 100.0,
-                    pressure / 1100.0,
-                    np.log10(gas) / 5.0
-                ]
-            elif anomaly_idx == 1:
-                corrected_humidity = np.clip(humidity, 30, 80)
-                targets = [
-                    is_valid,
-                    temp / 100.0,
-                    corrected_humidity / 100.0,
-                    pressure / 1100.0,
-                    np.log10(gas) / 5.0
-                ]
-            elif anomaly_idx == 2:
-                corrected_pressure = np.clip(pressure, 980, 1030)
-                targets = [
-                    is_valid,
-                    temp / 100.0,
-                    humidity / 100.0,
-                    corrected_pressure / 1100.0,
-                    np.log10(gas) / 5.0
-                ]
-            else:
-                corrected_gas = np.clip(gas, 1000, 20000)
-                targets = [
-                    is_valid,
-                    temp / 100.0,
-                    humidity / 100.0,
-                    pressure / 1100.0,
-                    np.log10(corrected_gas) / 5.0
-                ]
-        else:
-            # Normal data - all readings are valid
-            targets = [
-                1.0,  # Valid
-                temp / 100.0,
-                humidity / 100.0,
-                pressure / 1100.0,
-                np.log10(gas) / 5.0
-            ]
-        
-        X.append(features)
-        y.append(targets)
+    # Generate example Grafana queries
+    grafana_path = 'data/grafana_example_queries.txt'
+    with open(grafana_path, 'w') as f:
+        f.write("""
+# Basic time series query
+MATCH (sr:SensorReading)
+WHERE sr.timestamp >= $timeFrom AND sr.timestamp <= $timeTo
+RETURN sr.timestamp as time, sr.temperature as temp, sr.humidity as hum, sr.pressure as press, sr.gas as gas_res
+ORDER BY sr.timestamp ASC
+
+# Hourly aggregation query
+MATCH (sr:SensorReading)
+WHERE sr.timestamp >= $timeFrom AND sr.timestamp <= $timeTo
+WITH datetime({epochMillis: sr.timestamp}) as hour, sr
+WITH hour.hour as hourOfDay, avg(sr.temperature) as avgTemp, avg(sr.humidity) as avgHum, avg(sr.pressure) as avgPress
+RETURN hourOfDay, avgTemp, avgHum, avgPress
+ORDER BY hourOfDay
+
+# Anomaly detection query
+MATCH (sr:SensorReading)
+WHERE sr.timestamp >= $timeFrom AND sr.timestamp <= $timeTo
+WITH avg(sr.temperature) as avgTemp, stDev(sr.temperature) as stdTemp, collect(sr) as readings
+UNWIND readings as sr
+WITH sr, avgTemp, stdTemp
+WHERE abs(sr.temperature - avgTemp) > 2 * stdTemp
+RETURN sr.timestamp as time, sr.temperature as temp, avgTemp, stdTemp
+ORDER BY time
+        """)
     
-    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+    print(f"Grafana example queries saved to {grafana_path}")
 
 def main():
-    """Main function to build TensorRT LLM model for sensor data filtering"""
+    """Main function to build and export the model."""
     print("Building TensorRT LLM model for sensor data filtering...")
     
-    # Create models directory if it doesn't exist
-    os.makedirs("models", exist_ok=True)
+    # Load or generate training data
+    X_data, y_data = load_sensor_data()
     
-    # Check if we have training data
-    if os.path.exists("sensor_logs.json"):
-        print("Loading training data from logs...")
-        X_train, y_train = load_training_data("sensor_logs.json")
-    else:
-        print("No log data found. Generating synthetic training data...")
-        X_train, y_train = generate_sample_data(num_samples=5000)
-    
-    print(f"Training data shape: X={X_train.shape}, y={y_train.shape}")
-    
-    # Train model
-    model = train_model(X_train, y_train, epochs=500)
+    # Train the model
+    model = train_model(X_data, y_data)
     
     # Export to ONNX
-    input_shape = (1, X_train.shape[1])  # Batch size of 1, 4 features
-    output_shape = (1, y_train.shape[1])  # Batch size of 1, 5 outputs
-    onnx_path = create_onnx_model(input_shape, output_shape)
+    onnx_path = 'models/sensor_model.onnx'
+    export_to_onnx(model, X_data.shape[1], onnx_path)
     
     # Build TensorRT engine
     engine_path = build_tensorrt_engine(onnx_path)
     
-    print(f"TensorRT model built successfully: {engine_path}")
-    print("You can now use this model with the sensor_filter.py module")
+    # Generate sample Neo4j data and import scripts
+    generate_sample_neo4j_data()
+    
+    print(f"Model processing complete! Engine saved at {engine_path}")
+    print("You can now use the generated Neo4j data and Grafana queries for visualization.")
 
 if __name__ == "__main__":
     main()
