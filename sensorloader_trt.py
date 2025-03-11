@@ -1,187 +1,267 @@
-from neo4j import GraphDatabase
-from bme680 import BME680
+#!/usr/bin/env python3
+# sensorloader_trt.py - Read BME680 sensor data and process with TensorRT model
+
 import time
+import logging
+import numpy as np
 import json
 import os
-from datetime import datetime
-from sensor_filter import SensorFilter
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
 
-# Configuration
-CONFIG = {
-    "neo4j": {
-        "uri": "neo4j+s://41275b2a.databases.neo4j.io",
-        "user": "neo4j",
-        "password": "YOUR_PASSWORD_HERE"  # Replace with your actual password
-    },
-    "tensorrt": {
-        "model_path": "models/sensor_model.engine",
-        "threshold": 0.8
-    },
-    "sampling": {
-        "interval": 5,  # seconds between readings
-        "batch_size": 10  # number of readings to batch before sending to Neo4j
-    },
-    "logging": {
-        "file": "sensor_logs.json",
-        "level": "INFO"
-    }
-}
+# Import sensor library
+from bme680 import BME680
+from smbus2 import SMBus
 
-# Set up the Neo4j driver
-driver = GraphDatabase.driver(
-    CONFIG["neo4j"]["uri"], 
-    auth=(CONFIG["neo4j"]["user"], CONFIG["neo4j"]["password"])
-)
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Set up the BME680 sensor
-sensor = BME680()
-
-# Set up the sensor filter
-sensor_filter = SensorFilter(
-    model_path=CONFIG["tensorrt"]["model_path"],
-    window_size=20,
-    threshold=CONFIG["tensorrt"]["threshold"]
-)
-
-# Buffer for batching data
-data_buffer = []
-
-def create_sensor_reading(tx, readings):
-    """
-    Create multiple sensor reading nodes in a single transaction
+# TensorRT Engine handling
+class TensorRTInference:
+    def __init__(self, engine_path):
+        logger.info(f"Initializing TensorRT engine from {engine_path}")
+        self.logger = trt.Logger(trt.Logger.WARNING)
+        
+        # Load TRT engine
+        with open(engine_path, 'rb') as f:
+            runtime = trt.Runtime(self.logger)
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+            
+        if not self.engine:
+            raise RuntimeError("Failed to load TensorRT engine")
+            
+        # Create execution context
+        self.context = self.engine.create_execution_context()
+        
+        # Allocate memory for input/output
+        self.input_binding_idx = self.engine.get_binding_index('input')
+        self.output_binding_idx = self.engine.get_binding_index('output')
+        
+        # Get data shapes
+        self.input_shape = self.engine.get_binding_shape(self.input_binding_idx)
+        self.output_shape = self.engine.get_binding_shape(self.output_binding_idx)
+        
+        # Set optimization profile if using dynamic shapes
+        # For batch size 1
+        self.context.set_binding_shape(self.input_binding_idx, (1, self.input_shape[1]))
+        
+        # Create GPU buffers
+        self.d_input = cuda.mem_alloc(1 * self.input_shape[1] * np.dtype(np.float32).itemsize)
+        self.d_output = cuda.mem_alloc(1 * self.output_shape[1] * np.dtype(np.float32).itemsize)
+        
+        # Create host buffers
+        self.h_input = cuda.pagelocked_empty((1, self.input_shape[1]), dtype=np.float32)
+        self.h_output = cuda.pagelocked_empty((1, self.output_shape[1]), dtype=np.float32)
+        
+        # Create CUDA stream
+        self.stream = cuda.Stream()
+        
+        logger.info("TensorRT engine initialized successfully")
     
-    Args:
-        tx: Neo4j transaction
-        readings: List of sensor reading dictionaries
-    """
-    for reading in readings:
-        tx.run("""
-            CREATE (sr:SensorReading {
-                temperature: $temperature, 
-                humidity: $humidity, 
-                pressure: $pressure, 
-                gas: $gas, 
-                timestamp: $timestamp,
-                data_quality: $data_quality,
-                hour_of_day: $hour_of_day,
-                day_of_week: $day_of_week,
-                month: $month
-            })
-            """,
-            temperature=reading.get('temperature'),
-            humidity=reading.get('humidity'),
-            pressure=reading.get('pressure'),
-            gas=reading.get('gas'),
-            timestamp=reading.get('timestamp'),
-            data_quality=reading.get('data_quality', 'unknown'),
-            hour_of_day=reading.get('hour_of_day', 0),
-            day_of_week=reading.get('day_of_week', 0),
-            month=reading.get('month', 0)
+    def infer(self, sensor_data):
+        """Run inference on sensor data"""
+        # Normalize input data
+        normalized_data = self.normalize_data(sensor_data)
+        
+        # Copy to input buffer
+        np.copyto(self.h_input[0], normalized_data)
+        
+        # Copy input data to device
+        cuda.memcpy_htod_async(self.d_input, self.h_input, self.stream)
+        
+        # Run inference
+        self.context.execute_async_v2(
+            bindings=[int(self.d_input), int(self.d_output)],
+            stream_handle=self.stream.handle
         )
         
-        # If we have a heat index, add it
-        if 'heat_index' in reading:
-            tx.run("""
-                MATCH (sr:SensorReading)
-                WHERE sr.timestamp = $timestamp
-                SET sr.heat_index = $heat_index
-                """,
-                timestamp=reading.get('timestamp'),
-                heat_index=reading.get('heat_index')
-            )
-
-def log_data(data, status="normal"):
-    """Log data to file for debugging and training purposes"""
-    if not CONFIG["logging"]["file"]:
-        return
+        # Copy results back to host
+        cuda.memcpy_dtoh_async(self.h_output, self.d_output, self.stream)
+        
+        # Synchronize stream
+        self.stream.synchronize()
+        
+        return self.h_output[0]
     
-    try:
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "data": data,
-            "status": status
+    def normalize_data(self, data):
+        """Normalize sensor data to model input range"""
+        # Extract and normalize each sensor reading
+        # These normalization values should match those used during training
+        normalized = np.array([
+            data['temperature'] / 100.0,  # Scale temperature
+            data['humidity'] / 100.0,     # Scale humidity
+            data['pressure'] / 1100.0,    # Scale pressure
+            np.log10(max(data['gas_resistance'], 1)) / 5.0  # Log scale for gas resistance
+        ], dtype=np.float32)
+        
+        return normalized
+    
+    def interpret_results(self, results):
+        """Interpret model output"""
+        validity_score = results[0]
+        filtered_values = results[1:]
+        
+        is_valid = validity_score > 0.5
+        
+        return {
+            'validity_score': float(validity_score),
+            'is_valid': bool(is_valid),
+            'filtered_temperature': float(filtered_values[0] * 100.0),
+            'filtered_humidity': float(filtered_values[1] * 100.0),
+            'filtered_pressure': float(filtered_values[2] * 1100.0),
+            'filtered_gas_resistance': float(10 ** (filtered_values[3] * 5.0))
         }
-        
-        with open(CONFIG["logging"]["file"], "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-    except Exception as e:
-        print(f"Logging error: {e}")
 
-def flush_buffer():
-    """Send buffered readings to Neo4j"""
-    global data_buffer
-    
-    if not data_buffer:
-        return
-    
+def initialize_sensor():
+    """Initialize and configure the BME680 sensor"""
     try:
-        with driver.session() as session:
-            session.write_transaction(create_sensor_reading, data_buffer)
-            print(f"Inserted batch of {len(data_buffer)} sensor readings")
+        # Create an SMBus instance for I2C bus 7
+        i2c_bus = SMBus(7)
+        
+        # Initialize BME680 with the specified bus
+        sensor = BME680(i2c_device=i2c_bus)
+        
+        # Configure the sensor
+        sensor.set_humidity_oversample(BME680.OS_2X)
+        sensor.set_pressure_oversample(BME680.OS_4X)
+        sensor.set_temperature_oversample(BME680.OS_8X)
+        sensor.set_filter(BME680.FILTER_SIZE_3)
+        sensor.set_gas_status(BME680.ENABLE_GAS_MEAS)
+        
+        # Set gas heater parameters for measuring VOCs
+        sensor.set_gas_heater_temperature(320)
+        sensor.set_gas_heater_duration(150)
+        sensor.select_gas_heater_profile(0)
+        
+        logger.info("BME680 sensor initialized successfully")
+        return sensor, False
     except Exception as e:
-        print(f"Error inserting batch into Neo4j: {e}")
-        log_data(data_buffer, status="db_error")
-    
-    data_buffer = []
+        logger.warning(f"Failed to initialize BME680 sensor: {e}")
+        logger.warning("Running in simulation mode")
+        return None, True
 
-def process_sensor_reading():
-    """Read sensor, apply filtering, and buffer the data"""
-    global data_buffer
+def read_sensor_data(sensor, simulation_mode):
+    """Read data from BME680 sensor or generate simulated data"""
+    if not simulation_mode:
+        try:
+            if sensor.get_sensor_data():
+                return {
+                    'temperature': sensor.data.temperature,
+                    'humidity': sensor.data.humidity,
+                    'pressure': sensor.data.pressure,
+                    'gas_resistance': sensor.data.gas_resistance if sensor.data.heat_stable else 0
+                }
+        except Exception as e:
+            logger.error(f"Error reading sensor: {e}")
+            # Fall back to simulation if reading fails
+            simulation_mode = True
     
-    if sensor.get_sensor_data():
-        # Get raw sensor data
-        raw_data = {
-            'temperature': round(sensor.data.temperature, 2),
-            'humidity': round(sensor.data.humidity, 2),
-            'pressure': round(sensor.data.pressure, 2),
-            'gas': round(sensor.data.gas_resistance, 2),
-            'timestamp': int(time.time())
+    # Generate simulated data if in simulation mode or reading failed
+    if simulation_mode:
+        import random
+        return {
+            'temperature': round(random.uniform(18, 28), 2),
+            'humidity': round(random.uniform(40, 70), 2),
+            'pressure': round(random.uniform(990, 1030), 2),
+            'gas_resistance': round(random.uniform(5000, 15000), 2)
         }
+
+def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
+    """Write sensor readings to CSV file for Neo4j import"""
+    import csv
+    import os
+    from datetime import datetime
+    
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    # Check if file exists to determine if header needs to be written
+    file_exists = os.path.isfile(filename)
+    
+    # Current timestamp in milliseconds
+    timestamp = int(datetime.now().timestamp() * 1000)
+    
+    # Open CSV file in append mode
+    with open(filename, 'a', newline='') as csvfile:
+        fieldnames = ['timestamp', 'temperature', 'humidity', 'pressure', 'gas', 'validity_score']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
-        # Apply TensorRT LLM filtering
-        is_valid, filtered_data = sensor_filter.filter_sensor_data(raw_data)
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
         
-        # Add context information
-        enriched_data = sensor_filter.add_context(filtered_data)
-        
-        # Add to buffer
-        data_buffer.append(enriched_data)
-        
-        # Log the reading
-        msg = "normal" if is_valid else "filtered"
-        print(f"Processed sensor reading ({msg}) - temperature: {enriched_data['temperature']}, "
-              f"humidity: {enriched_data['humidity']}, pressure: {enriched_data['pressure']}, "
-              f"gas: {enriched_data['gas']}")
-        
-        # Log for training data collection
-        log_data({"raw": raw_data, "filtered": enriched_data}, status=msg)
-        
-        # If buffer is full, send to Neo4j
-        if len(data_buffer) >= CONFIG["sampling"]["batch_size"]:
-            flush_buffer()
-            
-            # Print anomaly report
-            print("Anomaly report:", json.dumps(sensor_filter.get_anomaly_report(), indent=2))
-    else:
-        print("Error reading BME680 sensor data.")
+        # Write data row
+        writer.writerow({
+            'timestamp': timestamp,
+            'temperature': data['raw']['temperature'],
+            'humidity': data['raw']['humidity'],
+            'pressure': data['raw']['pressure'],
+            'gas': data['raw']['gas_resistance'],
+            'validity_score': data['filtered']['validity_score']
+        })
 
 def main():
-    """Main function to run the sensor data collection"""
-    print(f"Starting sensor data collection with TensorRT LLM filtering")
-    print(f"Sampling interval: {CONFIG['sampling']['interval']} seconds")
-    print(f"Batch size: {CONFIG['sampling']['batch_size']} readings")
+    # Initialize sensor
+    sensor, simulation_mode = initialize_sensor()
+    
+    # Initialize TensorRT model
+    model_path = 'models/sensor_model.engine'
+    if not os.path.exists(model_path):
+        logger.error(f"Model not found: {model_path}")
+        logger.info("Please run build_sensor_model.py first to generate the model")
+        return
+    
+    trt_model = TensorRTInference(model_path)
+    
+    # Create data output directory
+    os.makedirs('data', exist_ok=True)
     
     try:
+        logger.info("Starting sensor data collection")
         while True:
-            process_sensor_reading()
-            time.sleep(CONFIG["sampling"]["interval"])
+            # Read sensor data
+            raw_data = read_sensor_data(sensor, simulation_mode)
+            
+            # Run inference
+            result = trt_model.infer(raw_data)
+            
+            # Interpret results
+            interpreted = trt_model.interpret_results(result)
+            
+            # Combine raw and filtered data
+            combined_data = {
+                'timestamp': int(time.time() * 1000),
+                'raw': raw_data,
+                'filtered': interpreted,
+                'status': 'normal' if interpreted['is_valid'] else 'anomaly'
+            }
+            
+            # Print status
+            logger.info(f"Status: {combined_data['status']} - " +
+                      f"Temp: {raw_data['temperature']:.1f}°C, " +
+                      f"Humidity: {raw_data['humidity']:.1f}%, " +
+                      f"Pressure: {raw_data['pressure']:.1f}hPa, " +
+                      f"Gas: {raw_data['gas_resistance']:.0f}Ω, " +
+                      f"Validity: {interpreted['validity_score']:.2f}")
+            
+            # Save data for Neo4j import
+            write_to_neo4j_csv(combined_data)
+            
+            # Wait before next reading
+            time.sleep(5)
+            
     except KeyboardInterrupt:
-        print("Shutting down...")
-        flush_buffer()  # Ensure any remaining data is sent
-    except Exception as e:
-        print(f"Error in main loop: {e}")
+        logger.info("Sensor monitoring stopped by user")
     finally:
-        driver.close()
+        if not simulation_mode and sensor is not None:
+            # Properly close I2C bus if needed
+            try:
+                sensor._i2c.close()
+            except:
+                pass
+        logger.info("Sensor monitoring finished")
 
 if __name__ == "__main__":
     main()
