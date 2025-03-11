@@ -201,8 +201,27 @@ def build_tensorrt_engine(onnx_path):
     # Updated API for TensorRT 8.x+
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
     
+    # Create an optimization profile for dynamic batch size
+    profile = builder.create_optimization_profile()
+    
+    # Get input tensor name and shape
+    input_tensor = network.get_input(0)
+    input_name = input_tensor.name
+    input_shape = input_tensor.shape
+    
+    # Set min, opt, max shapes for the dynamic input dimension (batch size)
+    min_shape = (1, input_shape[1])        # Minimum batch size of 1
+    opt_shape = (4, input_shape[1])        # Optimal batch size
+    max_shape = (16, input_shape[1])       # Maximum batch size
+    
+    profile.set_shape(input_name, min_shape, opt_shape, max_shape)
+    config.add_optimization_profile(profile)
+    
     # New TensorRT API (8.x+)
     serialized_engine = builder.build_serialized_network(network, config)
+    
+    if serialized_engine is None:
+        raise RuntimeError("Failed to build TensorRT engine")
     
     # Save engine to file
     engine_path = onnx_path.replace('.onnx', '.engine')
