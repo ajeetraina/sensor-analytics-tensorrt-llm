@@ -225,7 +225,7 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
             'pressure': data['raw']['pressure'],
             'gas': data['raw']['gas_resistance'],
             'validity_score': data['filtered']['validity_score']
-        })  # Fixed closing bracket
+        })
 
 def main():
     # Initialize sensor
