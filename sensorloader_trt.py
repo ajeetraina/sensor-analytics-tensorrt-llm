@@ -192,7 +192,7 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
         if not file_exists:
             writer.writeheader()
         
-        # Write data row - Fixed syntax error by removing extra bracket
+        # Write data row - Fixed syntax error by fixing brackets
         writer.writerow({
             'timestamp': timestamp,
             'temperature': data['raw']['temperature'],
