@@ -144,29 +144,54 @@ def initialize_sensor():
 
 def read_sensor_data(sensor, simulation_mode):
     """Read data from BME680 sensor or generate simulated data"""
-    if not simulation_mode:
+    # Default to simulation mode if there's any issue
+    use_simulation = simulation_mode
+    sensor_data = None
+    
+    if not use_simulation and sensor is not None:
         try:
+            # Try to get sensor data
             if sensor.get_sensor_data():
-                return {
+                sensor_data = {
                     'temperature': sensor.data.temperature,
                     'humidity': sensor.data.humidity,
                     'pressure': sensor.data.pressure,
                     'gas_resistance': sensor.data.gas_resistance if sensor.data.heat_stable else 0
                 }
+                logger.debug(f"Read sensor data: {sensor_data}")
+            else:
+                logger.warning("Sensor returned no data, using simulation")
+                use_simulation = True
         except Exception as e:
             logger.error(f"Error reading sensor: {e}")
             # Fall back to simulation if reading fails
-            simulation_mode = True
+            use_simulation = True
+    else:
+        use_simulation = True
     
     # Generate simulated data if in simulation mode or reading failed
-    if simulation_mode:
+    if use_simulation or sensor_data is None:
         import random
-        return {
+        sensor_data = {
             'temperature': round(random.uniform(18, 28), 2),
             'humidity': round(random.uniform(40, 70), 2),
             'pressure': round(random.uniform(990, 1030), 2),
             'gas_resistance': round(random.uniform(5000, 15000), 2)
         }
+        logger.debug(f"Generated simulated data: {sensor_data}")
+    
+    # Ensure we're returning valid data
+    if sensor_data is None:
+        logger.error("Failed to get sensor data or generate simulation data")
+        # Provide default values as a last resort
+        sensor_data = {
+            'temperature': 22.0,
+            'humidity': 50.0,
+            'pressure': 1000.0,
+            'gas_resistance': 10000.0
+        }
+    
+    return sensor_data
 
 def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
     """Write sensor readings to CSV file for Neo4j import"""
@@ -202,7 +227,17 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
             writer.writeheader()
         
         # Write data row
-        writer.writerow(row_data)
+ 
+        
+        writer.writerow({
+            'timestamp': timestamp,
+            'temperature': data['raw']['temperature'],
+            'humidity': data['raw']['humidity'],
+            'pressure': data['raw']['pressure'],
+            'gas': data['raw']['gas_resistance'],
+            'validity_score': data['filtered']['validity_score']
+        })
+
 
 def main():
     # Initialize sensor
@@ -226,30 +261,33 @@ def main():
             # Read sensor data
             raw_data = read_sensor_data(sensor, simulation_mode)
             
-            # Run inference
-            result = trt_model.infer(raw_data)
-            
-            # Interpret results
-            interpreted = trt_model.interpret_results(result)
-            
-            # Combine raw and filtered data
-            combined_data = {
-                'timestamp': int(time.time() * 1000),
-                'raw': raw_data,
-                'filtered': interpreted,
-                'status': 'normal' if interpreted['is_valid'] else 'anomaly'
-            }
-            
-            # Print status
-            logger.info(f"Status: {combined_data['status']} - " +
-                      f"Temp: {raw_data['temperature']:.1f}°C, " +
-                      f"Humidity: {raw_data['humidity']:.1f}%, " +
-                      f"Pressure: {raw_data['pressure']:.1f}hPa, " +
-                      f"Gas: {raw_data['gas_resistance']:.0f}Ω, " +
-                      f"Validity: {interpreted['validity_score']:.2f}")
-            
-            # Save data for Neo4j import
-            write_to_neo4j_csv(combined_data)
+            if raw_data is not None:
+                # Run inference
+                result = trt_model.infer(raw_data)
+                
+                # Interpret results
+                interpreted = trt_model.interpret_results(result)
+                
+                # Combine raw and filtered data
+                combined_data = {
+                    'timestamp': int(time.time() * 1000),
+                    'raw': raw_data,
+                    'filtered': interpreted,
+                    'status': 'normal' if interpreted['is_valid'] else 'anomaly'
+                }
+                
+                # Print status
+                logger.info(f"Status: {combined_data['status']} - " +
+                          f"Temp: {raw_data['temperature']:.1f}°C, " +
+                          f"Humidity: {raw_data['humidity']:.1f}%, " +
+                          f"Pressure: {raw_data['pressure']:.1f}hPa, " +
+                          f"Gas: {raw_data['gas_resistance']:.0f}Ω, " +
+                          f"Validity: {interpreted['validity_score']:.2f}")
+                
+                # Save data for Neo4j import
+                write_to_neo4j_csv(combined_data)
+            else:
+                logger.error("Failed to get sensor data, skipping this reading")
             
             # Wait before next reading
             time.sleep(5)
