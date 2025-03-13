@@ -226,18 +226,8 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
         if not file_exists:
             writer.writeheader()
         
-        # Write data row
- 
-        
-        writer.writerow({
-            'timestamp': timestamp,
-            'temperature': data['raw']['temperature'],
-            'humidity': data['raw']['humidity'],
-            'pressure': data['raw']['pressure'],
-            'gas': data['raw']['gas_resistance'],
-            'validity_score': data['filtered']['validity_score']
-        })
-
+        # Write data row using the prepared dictionary
+        writer.writerow(row_data)
 
 def main():
     # Initialize sensor
