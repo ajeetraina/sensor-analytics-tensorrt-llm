@@ -9,6 +9,48 @@ This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor dat
 <img width="1165" alt="image" src="https://github.com/user-attachments/assets/eb9f676b-d05c-4e75-b2e0-9705cb4a9abd" />
 
 
+
+- Data Collection - Shows how data flows from the BME680 sensor (or simulation) to the sensorloader_trt.py component
+- Model Training - Illustrates the complete model building pipeline from data generation through training to TensorRT engine creation
+- Data Filtering - Displays both the primary TensorRT-based filtering method and statistical fallback method, plus contextual enrichment
+- Neo4j Integration - Shows how filtered data is stored in Neo4j as nodes and relationships
+
+## How it works?
+
+This diagram provides a comprehensive visualization of your sensor analytics project architecture. Here's what it shows:
+
+1. Data Collection:
+
+- The BME680 sensor provides raw environmental readings
+- The sensorloader_trt.py script collects this data
+- A simulation mode serves as a fallback when physical sensors aren't available
+
+
+## Model Training:
+
+- The build_sensor_model.py script either uses synthetic or historical data
+- It trains a feed-forward neural network for filtering and anomaly detection
+- The trained model is exported to ONNX format and compiled into a TensorRT engine
+
+## Data Filtering:
+
+- sensor_filter.py implements two filtering approaches:
+- TensorRT model-based filtering (primary method)
+- Statistical z-score based filtering (fallback method)
+
+The filtering process adds contextual information and derived metrics
+
+
+## Neo4j Integration:
+
+- Filtered sensor data is stored as nodes in Neo4j
+- Time-based and pattern relationships connect these nodes
+- The database is queried by your AI assistant and visualized in Grafana
+
+
+The flow of data is clearly shown with arrows, and the diagram highlights both the main processing path and fallback methods in case of component failure. This architecture demonstrates how you've built a robust system for sensor data processing with intelligent filtering using TensorRT.
+
+
 ## Features
 
 - **Intelligent filtering** using TensorRT LLM to detect and correct anomalous sensor readings
