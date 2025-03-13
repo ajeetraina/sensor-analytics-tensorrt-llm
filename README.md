@@ -9,17 +9,10 @@ This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor dat
 <img width="1165" alt="image" src="https://github.com/user-attachments/assets/eb9f676b-d05c-4e75-b2e0-9705cb4a9abd" />
 
 
-
-- Data Collection - Shows how data flows from the BME680 sensor (or simulation) to the sensorloader_trt.py component
-- Model Training - Illustrates the complete model building pipeline from data generation through training to TensorRT engine creation
-- Data Filtering - Displays both the primary TensorRT-based filtering method and statistical fallback method, plus contextual enrichment
-- Neo4j Integration - Shows how filtered data is stored in Neo4j as nodes and relationships
-
 ## How it works?
 
-This diagram provides a comprehensive visualization of your sensor analytics project architecture. Here's what it shows:
 
-1. Data Collection:
+## Data Collection:
 
 - The BME680 sensor provides raw environmental readings
 - The sensorloader_trt.py script collects this data
