@@ -15,19 +15,19 @@ This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor dat
 ## Data Collection:
 
 - The BME680 sensor provides raw environmental readings
-- The sensorloader_trt.py script collects this data
+- The `sensorloader_trt.py` script collects this data
 - A simulation mode serves as a fallback when physical sensors aren't available
 
 
 ## Model Training:
 
-- The build_sensor_model.py script either uses synthetic or historical data
+- The `build_sensor_model.py` script either uses synthetic or historical data
 - It trains a feed-forward neural network for filtering and anomaly detection
 - The trained model is exported to ONNX format and compiled into a TensorRT engine
 
 ## Data Filtering:
 
-- sensor_filter.py implements two filtering approaches:
+- `sensor_filter.py` implements two filtering approaches:
 - TensorRT model-based filtering (primary method)
 - Statistical z-score based filtering (fallback method)
 
