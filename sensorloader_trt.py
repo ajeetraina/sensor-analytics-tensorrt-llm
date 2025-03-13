@@ -43,9 +43,11 @@ class TensorRTInference:
         self.input_shape = (1, 4)  # Batch size 1, 4 sensor values
         self.output_shape = (1, 5)  # Batch size 1, 5 output values (validity + 4 filtered values)
         
-        # Create GPU buffers
-        self.d_input = cuda.mem_alloc(np.prod(self.input_shape) * np.dtype(np.float32).itemsize)
-        self.d_output = cuda.mem_alloc(np.prod(self.output_shape) * np.dtype(np.float32).itemsize)
+        # Create GPU buffers - Fix for numpy.int64 vs unsigned long type mismatch
+        input_size = int(np.prod(self.input_shape) * np.dtype(np.float32).itemsize)
+        output_size = int(np.prod(self.output_shape) * np.dtype(np.float32).itemsize)
+        self.d_input = cuda.mem_alloc(input_size)
+        self.d_output = cuda.mem_alloc(output_size)
         
         # Create host buffers
         self.h_input = cuda.pagelocked_empty(self.input_shape, dtype=np.float32)
