@@ -72,8 +72,8 @@ class TensorRTInference:
         # Run inference
         bindings = [int(self.d_input), int(self.d_output)]
         
-        self.context.execute_async_v2(
-            bindings=bindings,
+        # Updated API call from execute_async_v2 to execute_async_v3
+        self.context.execute_async_v3(
             stream_handle=self.stream.handle
         )
         
