@@ -64,11 +64,11 @@ class SensorChatbot:
                 MATCH (s:SensorReading)
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp DESC
-                LIMIT {limit}
+                LIMIT $limit
             """,
             "average": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
+                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
                 RETURN 
                     avg(s.temperature) as avg_temp,
                     avg(s.humidity) as avg_humidity,
@@ -80,17 +80,17 @@ class SensorChatbot:
                 WHERE s.data_quality = 'filtered'
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp DESC
-                LIMIT {limit}
+                LIMIT $limit
             """,
             "time_range": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
+                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp ASC
             """,
             "max_values": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
+                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
                 RETURN 
                     max(s.temperature) as max_temp,
                     max(s.humidity) as max_humidity,
@@ -99,7 +99,7 @@ class SensorChatbot:
             """,
             "min_values": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
+                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
                 RETURN 
                     min(s.temperature) as min_temp,
                     min(s.humidity) as min_humidity,
@@ -108,7 +108,7 @@ class SensorChatbot:
             """,
             "count": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
+                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
                 RETURN count(s) as reading_count
             """
         }
@@ -168,10 +168,7 @@ class SensorChatbot:
         # Get the corresponding query template
         query_template = self.query_templates.get(query_type, self.query_templates["latest"])
         
-        # Format the query
-        query = query_template.format(**{k: v for k, v in params.items() if f"{{{k}}}" in query_template})
-        
-        return query, params, query_type
+        return query_template, params, query_type
     
     def format_response(self, records, query_type):
         """Format Neo4j response into a readable answer"""
@@ -306,7 +303,7 @@ class SensorChatbot:
             logger.info(f"Query parameters: {params}")
             
             # Execute query
-            records = self.neo4j.run_query(cypher_query)
+            records = self.neo4j.run_query(cypher_query, params)
             
             # Format response
             response = self.format_response(records, query_type)
