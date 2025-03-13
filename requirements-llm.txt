@@ -1,0 +1,5 @@
+# Requirements for sensor data chat integration
+neo4j==5.12.0
+matplotlib==3.8.2
+pandas==2.1.3
+numpy==1.26.2
