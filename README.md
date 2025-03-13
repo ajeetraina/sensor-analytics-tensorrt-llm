@@ -72,7 +72,7 @@ The flow of data is clearly shown with arrows, and the diagram highlights both t
 
 ## Prerequisites
 
-- NVIDIA Jetson Nano (2GB or 4GB model)
+- NVIDIA Jetson Orin Nano Super (8GB model)
 - BME680 environmental sensor
 - Neo4j Database (cloud or local)
 - NVIDIA TensorRT (installed via JetPack)
