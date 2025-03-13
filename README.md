@@ -150,6 +150,21 @@ python sensorloader_trt.py
 2025-03-13 12:40:43,654 - INFO - Status: normal - Temp: 34.3°C, Humidity: 37.3%, Pressure: 921.9hPa, Gas: 82816Ω, Validity: 1.00
 ```
 
+
+In nutshell,
+- Initializes BME680 sensor
+- Loads pre-trained TensorRT model
+- Collects sensor data
+- Runs inference on sensor readings
+- Provides status and processed data
+- Handles potential sensor communication failures
+
+Interesting aspects:
+
+Uses TensorRT for efficient machine learning inference
+Implements robust error handling
+Provides both real and simulated data modes
+
 ## Example Neo4j Queries
 
 ```cypher
