@@ -6,6 +6,9 @@ Intelligent sensor data analytics using TensorRT LLM for filtering and anomaly d
 
 This project demonstrates how to use NVIDIA's TensorRT LLM to process sensor data from a BME680 environmental sensor connected to a Jetson Nano, filter out anomalies and noise, and store the clean data in a Neo4j graph database.
 
+<img width="1165" alt="image" src="https://github.com/user-attachments/assets/eb9f676b-d05c-4e75-b2e0-9705cb4a9abd" />
+
+
 ## Features
 
 - **Intelligent filtering** using TensorRT LLM to detect and correct anomalous sensor readings
