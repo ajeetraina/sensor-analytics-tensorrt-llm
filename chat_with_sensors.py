@@ -64,11 +64,11 @@ class SensorChatbot:
                 MATCH (s:SensorReading)
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp DESC
-                LIMIT $limit
+                LIMIT {limit}
             """,
             "average": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
+                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
                 RETURN 
                     avg(s.temperature) as avg_temp,
                     avg(s.humidity) as avg_humidity,
@@ -80,17 +80,17 @@ class SensorChatbot:
                 WHERE s.data_quality = 'filtered'
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp DESC
-                LIMIT $limit
+                LIMIT {limit}
             """,
             "time_range": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
+                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
                 RETURN s.timestamp, s.temperature, s.humidity, s.pressure, s.gas
                 ORDER BY s.timestamp ASC
             """,
             "max_values": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
+                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
                 RETURN 
                     max(s.temperature) as max_temp,
                     max(s.humidity) as max_humidity,
@@ -99,7 +99,7 @@ class SensorChatbot:
             """,
             "min_values": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
+                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
                 RETURN 
                     min(s.temperature) as min_temp,
                     min(s.humidity) as min_humidity,
@@ -108,7 +108,7 @@ class SensorChatbot:
             """,
             "count": """
                 MATCH (s:SensorReading)
-                WHERE s.timestamp >= $start_time AND s.timestamp <= $end_time
+                WHERE s.timestamp >= {start_time} AND s.timestamp <= {end_time}
                 RETURN count(s) as reading_count
             """
         }
@@ -168,27 +168,7 @@ class SensorChatbot:
         # Get the corresponding query template
         query_template = self.query_templates.get(query_type, self.query_templates["latest"])
         
-        return query_template, params, query_type
-    
-    def format_response(self, records, query_type):
-        """Format Neo4j response into a readable answer"""
-        if not records:
-            return "I couldn't find any sensor readings matching your request."
+        # Format the query
+        query = query_template.format(**{k: v for k, v in params.items() if f"{{{k}}}" in query_template})
         
-        if query_type == "latest":
-            response = "Here are the latest sensor readings:\n\n"
-            for i, record in enumerate(records):
-                timestamp = datetime.fromtimestamp(record["s.timestamp"] / 1000)
-                response += f"Reading {i+1} ({timestamp.strftime('%Y-%m-%d %H:%M:%S')}):\n"
-                response += f"• Temperature: {record['s.temperature']:.1f}°C\n"
-                response += f"• Humidity: {record['s.humidity']:.1f}%\n"
-                response += f"• Pressure: {record['s.pressure']:.1f} hPa\n"
-                response += f"• Gas Resistance: {record['s.gas']:.0f} Ω\n\n"
-        
-        elif query_type == "average":
-            record = records[0]
-            response = "Here are the average sensor values for the specified period:\n\n"
-            response += f"• Average Temperature: {record['avg_temp']:.1f}°C\n"
-            response += f"• Average Humidity: {record['avg_humidity']:.1f}%\n"
-            response += f"• Average Pressure: {record['avg_pressure']:.1f} hPa\n"
-            response += f"• Average Gas Resistance: {record['avg_gas']:.0f} Ω\n"
+        return query, params, query_type
