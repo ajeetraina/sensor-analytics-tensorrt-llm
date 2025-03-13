@@ -192,7 +192,7 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
         if not file_exists:
             writer.writeheader()
         
-        # Write data row
+        # Write data row - Fixed syntax error by removing extra closing bracket
         writer.writerow({
             'timestamp': timestamp,
             'temperature': data['raw']['temperature'],
@@ -200,7 +200,7 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
             'pressure': data['raw']['pressure'],
             'gas': data['raw']['gas_resistance'],
             'validity_score': data['filtered']['validity_score']
-        })  # Fixed closing bracket
+        })
 
 def main():
     # Initialize sensor
