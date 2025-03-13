@@ -35,11 +35,7 @@ class TensorRTInference:
         # Create execution context
         self.context = self.engine.create_execution_context()
         
-        # Find input and output bindings by name 
-        self.input_name = "input"
-        self.output_name = "output"
-        
-        # Create GPU buffers and host buffers
+        # Find input and output bindings by name
         self.input_shape = (1, 4)  # Batch size 1, 4 sensor values
         self.output_shape = (1, 5)  # Batch size 1, 5 output values (validity + 4 filtered values)
         
@@ -56,6 +52,23 @@ class TensorRTInference:
         # Create CUDA stream
         self.stream = cuda.Stream()
         
+        # Get the names of all tensors in the engine
+        self.input_tensors = []
+        self.output_tensors = []
+        
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            dtype = self.engine.get_tensor_dtype(name)
+            shape = self.engine.get_tensor_shape(name)
+            is_input = self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT
+            
+            if is_input:
+                self.input_tensors.append((name, shape, dtype))
+                logger.info(f"Found input tensor: {name} with shape {shape} and dtype {dtype}")
+            else:
+                self.output_tensors.append((name, shape, dtype))
+                logger.info(f"Found output tensor: {name} with shape {shape} and dtype {dtype}")
+        
         logger.info("TensorRT engine initialized successfully")
     
     def infer(self, sensor_data):
@@ -70,15 +83,19 @@ class TensorRTInference:
             # Copy input data to device
             cuda.memcpy_htod_async(self.d_input, self.h_input, self.stream)
             
-            # Set input and output tensor addresses (required for execute_async_v3)
-            for i in range(self.engine.num_io_tensors):
-                name = self.engine.get_tensor_name(i)
-                if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-                    self.context.set_tensor_address(name, int(self.d_input))
-                else:  # OUTPUT
-                    self.context.set_tensor_address(name, int(self.d_output))
+            # Set specific input shapes for each tensor
+            for name, shape, dtype in self.input_tensors:
+                # Set the input shape (required for dynamic shapes)
+                self.context.set_input_shape(name, self.input_shape)
+                
+                # Set the tensor address
+                self.context.set_tensor_address(name, int(self.d_input))
             
-            # Run inference with the new TensorRT API
+            # Set output tensor addresses
+            for name, shape, dtype in self.output_tensors:
+                self.context.set_tensor_address(name, int(self.d_output))
+            
+            # Run inference with execute_async_v3
             self.context.execute_async_v3(stream_handle=self.stream.handle)
             
             # Copy results back to host
