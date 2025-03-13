@@ -183,6 +183,15 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
     # Current timestamp in milliseconds
     timestamp = int(datetime.now().timestamp() * 1000)
     
+    # Create row data dictionary
+    row_data = {}
+    row_data['timestamp'] = timestamp
+    row_data['temperature'] = data['raw']['temperature']
+    row_data['humidity'] = data['raw']['humidity']
+    row_data['pressure'] = data['raw']['pressure']
+    row_data['gas'] = data['raw']['gas_resistance']
+    row_data['validity_score'] = data['filtered']['validity_score']
+    
     # Open CSV file in append mode
     with open(filename, 'a', newline='') as csvfile:
         fieldnames = ['timestamp', 'temperature', 'humidity', 'pressure', 'gas', 'validity_score']
@@ -192,15 +201,8 @@ def write_to_neo4j_csv(data, filename='data/live_readings.csv'):
         if not file_exists:
             writer.writeheader()
         
-        # Write data row - FIXED: Corrected the syntax error in the dictionary
-        writer.writerow({
-            'timestamp': timestamp,
-            'temperature': data['raw']['temperature'],
-            'humidity': data['raw']['humidity'],
-            'pressure': data['raw']['pressure'],
-            'gas': data['raw']['gas_resistance'],
-            'validity_score': data['filtered']['validity_score']
-        })
+        # Write data row
+        writer.writerow(row_data)
 
 def main():
     # Initialize sensor
