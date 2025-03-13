@@ -135,6 +135,21 @@ You can now use the generated Neo4j data and Grafana queries for visualization.
    python sensorloader_trt.py
    ```
 
+```
+python sensorloader_trt.py
+2025-03-13 12:40:28,467 - INFO - BME680 sensor initialized successfully
+2025-03-13 12:40:28,468 - INFO - Initializing TensorRT engine from models/sensor_model.engine
+2025-03-13 12:40:28,519 - INFO - Found input tensor: input with shape (-1, 4) and dtype DataType.FLOAT
+2025-03-13 12:40:28,520 - INFO - Found output tensor: output with shape (-1, 5) and dtype DataType.FLOAT
+2025-03-13 12:40:28,520 - INFO - TensorRT engine initialized successfully
+2025-03-13 12:40:28,520 - INFO - Starting sensor data collection
+2025-03-13 12:40:28,624 - WARNING - Sensor returned no data, using simulation
+2025-03-13 12:40:28,627 - INFO - Status: normal - Temp: 22.9°C, Humidity: 63.5%, Pressure: 1026.3hPa, Gas: 5325Ω, Validity: 1.00
+2025-03-13 12:40:33,637 - INFO - Status: normal - Temp: 34.3°C, Humidity: 37.5%, Pressure: 921.9hPa, Gas: 0Ω, Validity: 1.00
+2025-03-13 12:40:38,645 - INFO - Status: normal - Temp: 34.3°C, Humidity: 37.4%, Pressure: 921.9hPa, Gas: 79817Ω, Validity: 1.00
+2025-03-13 12:40:43,654 - INFO - Status: normal - Temp: 34.3°C, Humidity: 37.3%, Pressure: 921.9hPa, Gas: 82816Ω, Validity: 1.00
+```
+
 ## Example Neo4j Queries
 
 ```cypher
