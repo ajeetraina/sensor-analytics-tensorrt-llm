@@ -167,6 +167,26 @@ ORDER BY s.timestamp DESC
 LIMIT 10
 ```
 
-## License
+## Using MCP and Prompts
 
-MIT License
+
+Data Exploration Prompts:
+
+- "Analyze the distribution of sensor readings across different classifications"
+- "Find patterns in sensor data that reveal unique time-based insights"
+- "Discover correlations between sensor readings and their classifications"
+
+
+## Advanced Analysis Prompts:
+
+
+- "Create a visualization that shows the most interesting sensor readings"
+- "Identify any anomalous sensor readings that deviate from typical patterns"
+- "Generate a time-based heatmap of sensor data variations"
+
+## Complex Query Challenges:
+
+
+- "Find the top 3 most frequent sensor reading classifications"
+- "Develop a query that tracks sensor reading trends over different time groups"
+- "Explore relationships between sensor readings and their associated classifications"
